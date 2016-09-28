@@ -1,8 +1,9 @@
 // This file defines a CUDA random walk microbenchmark, which traverses an
 // array in random order. This will print the times for each *block* in each
-// kernel invocation.
+// kernel invocation. Specify the -zc command-line argument to use zero-copy
+// memory.
 //
-// Example usage: ./random_walk
+// Usage: ./random_walk [-zc]
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,8 @@ typedef struct {
   uint8_t *host_outputs;
   uint8_t *device_outputs;
   cudaStream_t stream;
+  // This will be nonzero if we're using zero-copy memory.
+  uint8_t zero_copy;
 } WalkState;
 
 // Converts a 64-bit count of nanoseconds to a floating-point number of
@@ -138,11 +141,21 @@ void AllocateMemory(WalkState *state) {
   size_t output_array_size = THREAD_COUNT * BLOCK_COUNT * sizeof(uint8_t);
   size_t times_array_size = BLOCK_COUNT * 2 * sizeof(uint64_t);
   CheckError(cudaMallocHost(&state->host_times, times_array_size));
-  CheckError(cudaMalloc(&state->device_times, times_array_size));
   CheckError(cudaMallocHost(&state->host_array, array_size));
-  CheckError(cudaMalloc(&state->device_array, array_size));
   CheckError(cudaMallocHost(&state->host_outputs, output_array_size));
-  CheckError(cudaMalloc(&state->device_outputs, output_array_size));
+  if (!state->zero_copy) {
+    // Should we use zero-copy for the times array? For now, we will.
+    CheckError(cudaMalloc(&state->device_times, times_array_size));
+    CheckError(cudaMalloc(&state->device_array, array_size));
+    CheckError(cudaMalloc(&state->device_outputs, output_array_size));
+  } else {
+    CheckError(cudaHostGetDevicePointer(&state->device_times,
+      state->host_times, 0));
+    CheckError(cudaHostGetDevicePointer(&state->device_array,
+      state->host_array, 0));
+    CheckError(cudaHostGetDevicePointer(&state->device_outputs,
+      state->host_outputs, 0));
+  }
   CheckError(cudaStreamCreate(&state->stream));
   printf("Generating random walk array... ");
   fflush(stdout);
@@ -157,6 +170,7 @@ void AllocateMemory(WalkState *state) {
 // needs to be called once, since the input array is only read, and the output
 // array is always completely overwritten.
 void CopyIn(WalkState *state) {
+  if (state->zero_copy) return;
   size_t array_size = ARRAY_LENGTH * sizeof(uint32_t);
   CheckError(cudaMemcpyAsync(state->device_array, state->host_array,
     array_size, cudaMemcpyHostToDevice, state->stream));
@@ -166,6 +180,7 @@ void CopyIn(WalkState *state) {
 // Copies the output array from the device. Should be called after every
 // iteration, so that times can be recorded.
 void CopyOut(WalkState *state) {
+  if (state->zero_copy) return;
   size_t output_array_size = THREAD_COUNT * BLOCK_COUNT * sizeof(uint8_t);
   size_t times_array_size = BLOCK_COUNT * 2 * sizeof(uint64_t);
   CheckError(cudaMemcpyAsync(state->host_outputs, state->device_outputs,
@@ -175,23 +190,49 @@ void CopyOut(WalkState *state) {
   CheckError(cudaStreamSynchronize(state->stream));
 }
 
-// Frees memory and closes the device stream.
+// Frees memory and closes the device stream. This will also reset the
+// zero_copy field to 0.
 void FreeMemory(WalkState *state) {
   CheckError(cudaStreamSynchronize(state->stream));
   CheckError(cudaStreamDestroy(state->stream));
-  CheckError(cudaFree(state->device_array));
-  CheckError(cudaFree(state->device_outputs));
-  CheckError(cudaFree(state->device_times));
+  if (!state->zero_copy) {
+    CheckError(cudaFree(state->device_array));
+    CheckError(cudaFree(state->device_outputs));
+    CheckError(cudaFree(state->device_times));
+  }
   CheckError(cudaFreeHost(state->host_array));
   CheckError(cudaFreeHost(state->host_outputs));
   CheckError(cudaFreeHost(state->host_times));
   memset(state, 0, sizeof(*state));
 }
 
+// Checks command-line arguments and sets members of the state struct if any
+// are affected. May exit the program if any arguments are invalid.
+static void ParseArgs(int argc, char **argv, WalkState *state) {
+  int i;
+  state->zero_copy = 0;
+  if (argc == 1) return;
+  if (argc != 2) {
+    printf("Usage: %s [-zc]\n"
+      "  Specify -zc to use zero-copy memory.\n", argv[0]);
+    exit(1);
+  }
+  for (i = 1; i < argc; i++) {
+    if (strncmp(argv[i], "-zc", 3) == 0) {
+      state->zero_copy = 1;
+      continue;
+    }
+    printf("Unknown argument: %s\n", argv[i]);
+    exit(1);
+  }
+}
+
 int main(int argc, char **argv) {
   int i, j;
   double block_start, block_end;
   WalkState state;
+  srand48(RANDOM_SEED);
+  ParseArgs(argc, argv, &state);
   // Initialize and allocate memory, then lock pages.
   Initialize(2);
   AllocateMemory(&state);
