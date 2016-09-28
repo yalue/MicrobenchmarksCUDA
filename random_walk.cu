@@ -1,11 +1,6 @@
 // This file defines a CUDA random walk microbenchmark, which traverses an
-// array in random order. This requires the path to a binary file containing an
-// array of 32-bit unsigned integers. This array must have ARRAY_LENGTH (see
-// the defines) members including all numbers in the range [0, ARRAY_LENGTH).
-// These numbers should be in a random permutation. This pre-initialized file
-// will NOT be checked for correctness, but we use it anyway in order to
-// eliminate a lengthy startup time which would be necessary if we generated
-// and shuffled the array ourselves.
+// array in random order. This will print the times for each *block* in each
+// kernel invocation.
 //
 // Example usage: ./random_walk
 #include <stdint.h>
