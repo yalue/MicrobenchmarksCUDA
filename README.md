@@ -1,3 +1,9 @@
+Important Note
+==============
+
+This repository is now out-of-date. The currently maintained version is now at
+[this repository](https://github.com/Sarahild/CudaMemoryExperiments).
+
 CUDA Microbenchmarks
 ====================
 
